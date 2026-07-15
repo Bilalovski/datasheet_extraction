@@ -1,0 +1,13 @@
+Product Brief
+
+TRX-9 Ultrasonic Proximity Sensor
+Vellum Instruments
+
+
+The TRX-9 is a compact ultrasonic proximity sensor for indoor robotics and
+automated material handling.
+
+  Operating range .......... 0.2 m to 6 m
+  Supply ................... 12 V
+
+This product brief is a summary. Contact sales for the full specification.

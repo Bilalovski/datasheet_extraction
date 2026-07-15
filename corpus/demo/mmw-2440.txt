@@ -1,0 +1,24 @@
+MMW-2440  |  24 GHz Radar Module
+Northgate Sensing
+
+
+Description
+-----------
+Short-range 24 GHz FMCW radar module for industrial tank level sensing and
+presence detection.
+
+
+Specifications
+--------------
+  Centre frequency ................ 24.125 GHz
+  Sweep bandwidth ................. 250 MHz
+  Range resolution ................ 60 cm
+  Detection range ................. up to 30 m
+  Beam width (azimuth) ............ 78 degrees
+  Antenna configuration ........... 1 Tx, 2 Rx
+  Supply .......................... 5 V DC
+  Output .......................... CAN
+
+
+Note: elevation beam width is not specified for this variant. Consult the
+MMW-2441 datasheet if elevation coverage is required.
