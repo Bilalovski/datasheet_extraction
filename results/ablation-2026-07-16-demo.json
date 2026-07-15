@@ -1,0 +1,74 @@
+[
+  {
+    "model": "deepseek-v4-flash",
+    "variant": "minimal",
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "halluc_rate": 0.0,
+    "cost_usd": 0.00102,
+    "latency_s": 3.72,
+    "failed": 0,
+    "repairs": 0
+  },
+  {
+    "model": "deepseek-v4-flash",
+    "variant": "strict",
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "halluc_rate": 0.0,
+    "cost_usd": 0.00119,
+    "latency_s": 4.45,
+    "failed": 0,
+    "repairs": 0
+  },
+  {
+    "model": "deepseek-v4-flash",
+    "variant": "strict_with_examples",
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "halluc_rate": 0.0,
+    "cost_usd": 0.00064,
+    "latency_s": 3.98,
+    "failed": 0,
+    "repairs": 1
+  },
+  {
+    "model": "deepseek-v4-pro",
+    "variant": "minimal",
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "halluc_rate": 0.0,
+    "cost_usd": 0.00376,
+    "latency_s": 6.84,
+    "failed": 0,
+    "repairs": 0
+  },
+  {
+    "model": "deepseek-v4-pro",
+    "variant": "strict",
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "halluc_rate": 0.0,
+    "cost_usd": 0.00344,
+    "latency_s": 5.73,
+    "failed": 0,
+    "repairs": 0
+  },
+  {
+    "model": "deepseek-v4-pro",
+    "variant": "strict_with_examples",
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "halluc_rate": 0.0,
+    "cost_usd": 0.00377,
+    "latency_s": 6.44,
+    "failed": 0,
+    "repairs": 0
+  }
+]

@@ -1,41 +1,104 @@
-"""Running extraction against the Claude API.
+"""Running extraction against the DeepSeek API.
 
-Uses structured outputs (``messages.parse``) rather than asking for JSON in
-prose and parsing it: the schema is enforced server-side, so a response either
-validates against :class:`~datasheet_extraction.schema.SensorSpec` or the call
-fails loudly. There is no regex-the-model's-JSON path to go wrong.
+DeepSeek is OpenAI-compatible, so this uses the ``openai`` client pointed at
+``api.deepseek.com``. Two things about that API shape the design here, and both
+were established by probing it rather than assuming:
+
+**There is no strict schema mode.** ``response_format={"type": "json_schema"}``
+is rejected outright ("This response_format type is unavailable now"), so the
+schema is delivered as a function's parameters and enforced client-side by
+Pydantic. The model can and does violate it — ``deepseek-reasoner`` will return
+``"elevation_fov_deg": "null"`` as a quoted string where the schema says
+number-or-null — so validation is a real step, not a formality.
+
+**Forced tool_choice only works in non-thinking mode.** Every canonical model id
+runs in thinking mode and rejects ``tool_choice="required"`` or a named function.
+``tool_choice="auto"`` is the only mechanism that works across all of them, so
+that is what is used, and a turn where the model declines to call the tool is
+recorded as a failure.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from dataclasses import dataclass
 
-import anthropic
+import openai
+from pydantic import ValidationError
 
 from . import prompts
 from .cost import Usage, estimate_cost
 from .schema import SensorSpec, strict_json_schema
 
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_BASE_URL = "https://api.deepseek.com"
 
-#: Extraction output is one flat object — a few hundred tokens at most. This is
-#: sized to leave headroom, not to be reached; a response that hits it comes
-#: back with stop_reason "max_tokens" and is recorded as a failure.
-MAX_TOKENS = 2048
+#: Extraction output is one flat object — a few hundred tokens. Thinking-mode
+#: models spend tokens reasoning before the tool call, so this is well clear of
+#: the answer's own size rather than snug against it.
+MAX_TOKENS = 4096
 
-#: Shortest prefix each model will cache, in tokens. A shorter prefix is not an
-#: error — it silently does not cache, reporting cache_creation_input_tokens: 0.
-#: Sonnet 5 is absent from the published table, so it is not listed here rather
-#: than guessed at; caching is skipped for models with no known threshold.
-MIN_CACHEABLE_TOKENS: dict[str, int] = {
-    "claude-opus-4-8": 4096,
-    "claude-opus-4-7": 4096,
-    "claude-opus-4-6": 4096,
-    "claude-haiku-4-5": 4096,
-    "claude-fable-5": 2048,
-    "claude-sonnet-4-6": 2048,
-}
+TOOL_NAME = "record_spec"
+
+#: Strings a model reaches for when it means "nothing here". The schema says to
+#: return null; these are what comes back instead. Mapping them to None measures
+#: extraction rather than JSON etiquette — but the count is reported, so the
+#: serialisation defect stays visible instead of being silently absorbed.
+NULLISH = frozenset({
+    "", "null", "none", "n/a", "na", "nil",
+    "unknown", "not specified", "not stated",
+})
+
+
+def build_client(api_key: str | None = None, base_url: str | None = None) -> openai.OpenAI:
+    """Build a DeepSeek client.
+
+    The key is read from ``DEEPSEEK_API_KEY`` and has no default on purpose. A
+    hardcoded fallback key in a public repository is scraped within minutes of
+    the push and cannot be removed from git history afterwards.
+    """
+    key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY is not set. Export it (or put it in a .env you do "
+            "not commit) — never hardcode it in the source."
+        )
+    return openai.OpenAI(
+        api_key=key,
+        base_url=base_url or os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL),
+    )
+
+
+def _tool_definition() -> dict:
+    """The schema, delivered as a function the model can call.
+
+    Passing SensorSpec's JSON schema as the parameters is what carries the field
+    descriptions — the unit rules, the half-angle convention, "null if not
+    stated" — to the model. It is prompt engineering that lives in the type.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": TOOL_NAME,
+            "description": "Record the specifications extracted from the datasheet.",
+            "parameters": strict_json_schema(SensorSpec),
+        },
+    }
+
+
+def repair_nullish(raw: dict) -> tuple[dict, list[str]]:
+    """Map null-ish strings to None. Returns the repaired dict and what changed."""
+    repaired: dict = {}
+    touched: list[str] = []
+    for key, value in raw.items():
+        if isinstance(value, str) and value.strip().casefold() in NULLISH:
+            repaired[key] = None
+            touched.append(key)
+        else:
+            repaired[key] = value
+    return repaired, touched
 
 
 @dataclass
@@ -49,6 +112,7 @@ class Extraction:
     usage: Usage
     latency_s: float
     error: str | None = None
+    repaired_fields: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -59,33 +123,24 @@ class Extraction:
         return estimate_cost(self.model, self.usage)
 
 
-def _system_blocks(variant: str, model: str, cache: bool) -> list[dict] | str:
-    """Build the system prompt, optionally marked for caching.
-
-    Caching is only requested when the prompt could plausibly clear the model's
-    minimum cacheable prefix. Marking a shorter prefix is not harmful, just
-    inert — but silently inert, which is worse than not asking for it.
-    """
-    text = prompts.get(variant)
-    if not cache:
-        return text
-
-    threshold = MIN_CACHEABLE_TOKENS.get(model)
-    # ~4 chars per token is rough, but the decision only needs the order of
-    # magnitude: these prompts are ~2k characters against a 4k-token floor.
-    if threshold is None or len(text) / 4 < threshold:
-        return text
-
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+def _failed(doc_id, model, variant, usage, started, error) -> Extraction:
+    return Extraction(
+        doc_id=doc_id,
+        model=model,
+        variant=variant,
+        spec=None,
+        usage=usage,
+        latency_s=time.perf_counter() - started,
+        error=error,
+    )
 
 
 def extract_one(
-    client: anthropic.Anthropic,
+    client: openai.OpenAI,
     doc_id: str,
     document_text: str,
     model: str = DEFAULT_MODEL,
     variant: str = prompts.DEFAULT_VARIANT,
-    cache_system: bool = False,
 ) -> Extraction:
     """Extract one datasheet. Never raises — failures land in ``Extraction.error``.
 
@@ -95,165 +150,83 @@ def extract_one(
     """
     started = time.perf_counter()
     try:
-        response = client.messages.parse(
+        response = client.chat.completions.create(
             model=model,
             max_tokens=MAX_TOKENS,
-            system=_system_blocks(variant, model, cache_system),
-            messages=[{"role": "user", "content": prompts.user_message(document_text)}],
-            output_format=SensorSpec,
+            messages=[
+                {"role": "system", "content": prompts.get(variant)},
+                {"role": "user", "content": prompts.user_message(document_text)},
+            ],
+            tools=[_tool_definition()],
+            tool_choice="auto",
         )
-    except anthropic.APIStatusError as exc:
-        return Extraction(
-            doc_id=doc_id,
-            model=model,
-            variant=variant,
-            spec=None,
-            usage=Usage(),
-            latency_s=time.perf_counter() - started,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-    except anthropic.APIConnectionError as exc:
-        return Extraction(
-            doc_id=doc_id,
-            model=model,
-            variant=variant,
-            spec=None,
-            usage=Usage(),
-            latency_s=time.perf_counter() - started,
-            error=f"APIConnectionError: {exc}",
-        )
+    except openai.APIStatusError as exc:
+        return _failed(doc_id, model, variant, Usage(), started, f"{type(exc).__name__}: {exc}")
+    except openai.APIConnectionError as exc:
+        return _failed(doc_id, model, variant, Usage(), started, f"APIConnectionError: {exc}")
 
     latency = time.perf_counter() - started
     usage = Usage.from_response(response.usage)
+    choice = response.choices[0]
 
-    # A refusal or a truncated response both yield no usable object; record the
-    # reason rather than letting a None parsed_output look like a clean null.
-    if response.stop_reason not in ("end_turn", None) or response.parsed_output is None:
-        return Extraction(
-            doc_id=doc_id,
-            model=model,
-            variant=variant,
-            spec=None,
-            usage=usage,
-            latency_s=latency,
-            error=f"no parsed output (stop_reason={response.stop_reason})",
+    calls = choice.message.tool_calls
+    if not calls:
+        # tool_choice="auto" is the only portable option, so this is reachable:
+        # the model answered in prose instead of calling the tool.
+        preview = (choice.message.content or "")[:120]
+        return _failed(
+            doc_id, model, variant, usage, started,
+            f"no tool call (finish_reason={choice.finish_reason}): {preview!r}",
+        )
+
+    try:
+        raw = json.loads(calls[0].function.arguments)
+    except json.JSONDecodeError as exc:
+        return _failed(
+            doc_id, model, variant, usage, started, f"tool arguments were not JSON: {exc}"
+        )
+
+    if not isinstance(raw, dict):
+        return _failed(
+            doc_id, model, variant, usage, started,
+            f"tool arguments were {type(raw).__name__}, not an object",
+        )
+
+    repaired, touched = repair_nullish(raw)
+    try:
+        spec = SensorSpec.model_validate(repaired)
+    except ValidationError as exc:
+        # DeepSeek does not enforce the schema server-side, so this is a real
+        # failure mode rather than defensive padding.
+        first = exc.errors()[0]
+        return _failed(
+            doc_id, model, variant, usage, started,
+            f"schema violation at {'.'.join(str(p) for p in first['loc'])}: {first['msg']}",
         )
 
     return Extraction(
         doc_id=doc_id,
         model=model,
         variant=variant,
-        spec=response.parsed_output,
+        spec=spec,
         usage=usage,
         latency_s=latency,
+        repaired_fields=tuple(touched),
     )
 
 
 def extract_corpus(
-    client: anthropic.Anthropic,
+    client: openai.OpenAI,
     documents: dict[str, str],
     model: str = DEFAULT_MODEL,
     variant: str = prompts.DEFAULT_VARIANT,
-    cache_system: bool = False,
     on_result=None,
 ) -> list[Extraction]:
-    """Extract every document, one request each.
-
-    For corpora past a few dozen documents, prefer :func:`submit_batch` — the
-    Batch API halves the price for work that doesn't need to be interactive.
-    """
+    """Extract every document, one request each."""
     results = []
     for doc_id, text in documents.items():
-        result = extract_one(
-            client, doc_id, text, model=model, variant=variant, cache_system=cache_system
-        )
+        result = extract_one(client, doc_id, text, model=model, variant=variant)
         results.append(result)
         if on_result is not None:
             on_result(result)
     return results
-
-
-def submit_batch(
-    client: anthropic.Anthropic,
-    documents: dict[str, str],
-    model: str = DEFAULT_MODEL,
-    variant: str = prompts.DEFAULT_VARIANT,
-) -> str:
-    """Queue a corpus on the Batch API and return the batch id.
-
-    The Batch API has no ``parse()`` helper, so the schema goes over the wire as
-    ``output_config.format`` and the response comes back as JSON text to validate
-    client-side — same schema, same guarantees, more assembly.
-    """
-    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
-    from anthropic.types.messages.batch_create_params import Request
-
-    schema = strict_json_schema(SensorSpec)
-    system = prompts.get(variant)
-
-    batch = client.messages.batches.create(
-        requests=[
-            Request(
-                custom_id=doc_id,
-                params=MessageCreateParamsNonStreaming(
-                    model=model,
-                    max_tokens=MAX_TOKENS,
-                    system=system,
-                    messages=[
-                        {"role": "user", "content": prompts.user_message(text)}
-                    ],
-                    output_config={"format": {"type": "json_schema", "schema": schema}},
-                ),
-            )
-            for doc_id, text in documents.items()
-        ]
-    )
-    return batch.id
-
-
-def collect_batch(
-    client: anthropic.Anthropic, batch_id: str, model: str, variant: str
-) -> list[Extraction]:
-    """Read a finished batch's results into :class:`Extraction` objects.
-
-    Results arrive in arbitrary order, so they are keyed by ``custom_id`` — the
-    document id submitted with each request — never by position.
-    """
-    extractions = []
-    for result in client.messages.batches.results(batch_id):
-        doc_id = result.custom_id
-        if result.result.type != "succeeded":
-            extractions.append(
-                Extraction(
-                    doc_id=doc_id,
-                    model=model,
-                    variant=variant,
-                    spec=None,
-                    usage=Usage(),
-                    latency_s=0.0,
-                    error=f"batch result: {result.result.type}",
-                )
-            )
-            continue
-
-        message = result.result.message
-        usage = Usage.from_response(message.usage)
-        text = next((b.text for b in message.content if b.type == "text"), None)
-        try:
-            spec = SensorSpec.model_validate_json(text) if text else None
-            error = None if spec else "batch result had no text block"
-        except Exception as exc:  # pydantic validation
-            spec, error = None, f"schema validation failed: {exc}"
-
-        extractions.append(
-            Extraction(
-                doc_id=doc_id,
-                model=model,
-                variant=variant,
-                spec=spec,
-                usage=usage,
-                latency_s=0.0,
-                error=error,
-            )
-        )
-    return extractions

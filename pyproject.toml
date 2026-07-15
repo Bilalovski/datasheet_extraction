@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "datasheet-extraction"
 version = "0.1.0"
-description = "Structured extraction of sensor specifications from datasheets, with an evaluation harness"
+description = "Structured extraction of sensor specifications from datasheets (DeepSeek), with an evaluation harness"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "anthropic>=0.116",
+    "openai>=1.40",
     "pydantic>=2.7",
 ]
 

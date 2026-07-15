@@ -11,11 +11,13 @@ pay for themselves, is what ``ablate`` measures rather than assumes.
 from __future__ import annotations
 
 MINIMAL = """\
-Extract the sensor's specifications from the datasheet text into the given schema.\
+Extract the sensor's specifications from the datasheet text and record them with
+the record_spec tool.\
 """
 
 STRICT = """\
-You extract sensor specifications from datasheet text into a structured schema.
+You extract sensor specifications from datasheet text and record them with the
+record_spec tool. Always call the tool rather than answering in prose.
 
 Rules:
 - Report only what the document states. If a field is not stated, return null \

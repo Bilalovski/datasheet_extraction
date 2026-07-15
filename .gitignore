@@ -8,7 +8,7 @@ dist/
 .venv/
 venv/
 
-# Run outputs
+# Run outputs (committed results live in results/)
 predictions.json
 ablation.json
 

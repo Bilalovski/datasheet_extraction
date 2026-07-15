@@ -9,27 +9,15 @@ from pathlib import Path
 
 from . import prompts
 from .corpus import load_corpus
-from .cost import Usage, estimate_cost
+from .cost import PRICING, Usage, estimate_cost
 from .evaluate import evaluate
-from .extract import DEFAULT_MODEL, Extraction, extract_corpus
+from .extract import DEFAULT_MODEL, Extraction, build_client, extract_corpus
 from .schema import SensorSpec
 
 DEFAULT_CORPUS = Path("corpus/demo")
 
 
-def _client():
-    """Build a client, resolving credentials the way the SDK does.
-
-    Deliberately zero-arg: the SDK reads ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-    or an `ant auth login` profile, so an unset API key does not mean unauthenticated.
-    """
-    import anthropic
-
-    return anthropic.Anthropic()
-
-
 def _render_table(rows: list[dict], columns: list[str]) -> str:
-    """Render rows as a fixed-width table."""
     widths = {
         col: max(len(col), *(len(f"{row[col]}") for row in rows)) for col in columns
     }
@@ -41,28 +29,26 @@ def _render_table(rows: list[dict], columns: list[str]) -> str:
     return "\n".join([header, rule, *body])
 
 
-def _run_extraction(args, documents) -> list[Extraction]:
-    client = _client()
-    total = len(documents)
+def _run_extraction(model: str, variant: str, documents: dict[str, str]) -> list[Extraction]:
+    client = build_client()
 
     def progress(result: Extraction) -> None:
-        marker = "ok " if result.ok else "FAIL"
+        marker = "ok  " if result.ok else "FAIL"
         note = "" if result.ok else f"  {result.error}"
+        repaired = (
+            f"  repaired={','.join(result.repaired_fields)}" if result.repaired_fields else ""
+        )
         print(
-            f"  [{marker}] {result.doc_id:<16} {result.latency_s:5.1f}s"
-            f"  ${result.cost_usd:.4f}{note}",
+            f"  [{marker}] {result.doc_id:<12} {result.latency_s:5.1f}s"
+            f"  ${result.cost_usd:.5f}{repaired}{note}",
             file=sys.stderr,
         )
 
-    print(f"extracting {total} documents with {args.model} / {args.variant}", file=sys.stderr)
-    return extract_corpus(
-        client,
-        documents,
-        model=args.model,
-        variant=args.variant,
-        cache_system=args.cache_system,
-        on_result=progress,
+    print(
+        f"extracting {len(documents)} documents  model={model}  variant={variant}",
+        file=sys.stderr,
     )
+    return extract_corpus(client, documents, model=model, variant=variant, on_result=progress)
 
 
 def _summarise(results: list[Extraction], model: str) -> dict:
@@ -70,10 +56,12 @@ def _summarise(results: list[Extraction], model: str) -> dict:
     return {
         "documents": len(results),
         "failed": sum(1 for r in results if not r.ok),
-        "prompt_tokens": usage.total_prompt_tokens,
+        "schema_repairs": sum(len(r.repaired_fields) for r in results),
+        "prompt_tokens": usage.prompt_tokens,
+        "cache_hit_tokens": usage.cache_hit_tokens,
+        "cache_hit_rate": round(usage.cache_hit_rate, 3),
         "output_tokens": usage.output_tokens,
-        "cache_read_tokens": usage.cache_read_input_tokens,
-        "cost_usd": round(estimate_cost(model, usage), 4),
+        "cost_usd": round(estimate_cost(model, usage), 5),
         "mean_latency_s": (
             round(sum(r.latency_s for r in results) / len(results), 2) if results else 0.0
         ),
@@ -82,11 +70,9 @@ def _summarise(results: list[Extraction], model: str) -> dict:
 
 def cmd_extract(args) -> int:
     documents, _ = load_corpus(args.corpus)
-    results = _run_extraction(args, documents)
+    results = _run_extraction(args.model, args.variant, documents)
 
-    payload = {
-        r.doc_id: (r.spec.model_dump() if r.spec else None) for r in results
-    }
+    payload = {r.doc_id: (r.spec.model_dump() if r.spec else None) for r in results}
     args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nwrote {args.output}", file=sys.stderr)
     print(json.dumps(_summarise(results, args.model), indent=2))
@@ -105,7 +91,7 @@ def cmd_evaluate(args) -> int:
         }
         summary = None
     else:
-        results = _run_extraction(args, documents)
+        results = _run_extraction(args.model, args.variant, documents)
         predicted = {r.doc_id: r.spec for r in results if r.spec is not None}
         summary = _summarise(results, args.model)
 
@@ -129,13 +115,9 @@ def cmd_ablate(args) -> int:
 
     for model in args.models:
         for variant in args.variants:
-            run_args = argparse.Namespace(
-                model=model, variant=variant, cache_system=args.cache_system
-            )
-            results = _run_extraction(run_args, documents)
+            results = _run_extraction(model, variant, documents)
             predicted = {r.doc_id: r.spec for r in results if r.spec is not None}
-            report = evaluate(gold, predicted)
-            total = report.total
+            total = evaluate(gold, predicted).total
             summary = _summarise(results, model)
 
             rows.append(
@@ -149,6 +131,7 @@ def cmd_ablate(args) -> int:
                     "cost_usd": summary["cost_usd"],
                     "latency_s": summary["mean_latency_s"],
                     "failed": summary["failed"],
+                    "repairs": summary["schema_repairs"],
                 }
             )
 
@@ -157,15 +140,8 @@ def cmd_ablate(args) -> int:
         _render_table(
             rows,
             [
-                "model",
-                "variant",
-                "f1",
-                "precision",
-                "recall",
-                "halluc_rate",
-                "cost_usd",
-                "latency_s",
-                "failed",
+                "model", "variant", "f1", "precision", "recall",
+                "halluc_rate", "cost_usd", "latency_s", "failed", "repairs",
             ],
         )
     )
@@ -183,28 +159,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_common(p):
+        p.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
         p.add_argument(
-            "--corpus", type=Path, default=DEFAULT_CORPUS, help="corpus directory"
+            "--model", default=DEFAULT_MODEL, help=f"one of: {', '.join(sorted(PRICING))}"
         )
-        p.add_argument("--model", default=DEFAULT_MODEL, help="model id")
         p.add_argument(
             "--variant",
             default=prompts.DEFAULT_VARIANT,
             choices=sorted(prompts.VARIANTS),
-            help="prompt variant",
-        )
-        p.add_argument(
-            "--cache-system",
-            action="store_true",
-            help="request prompt caching on the system prefix (a no-op below the "
-            "model's minimum cacheable size — check cache_read_tokens)",
         )
 
     p_extract = sub.add_parser("extract", help="extract and write predictions to JSON")
     add_common(p_extract)
-    p_extract.add_argument(
-        "--output", type=Path, default=Path("predictions.json"), help="where to write"
-    )
+    p_extract.add_argument("--output", type=Path, default=Path("predictions.json"))
     p_extract.set_defaults(func=cmd_extract)
 
     p_eval = sub.add_parser("evaluate", help="score predictions against gold labels")
@@ -218,12 +185,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ablate = sub.add_parser("ablate", help="sweep models x prompt variants")
     p_ablate.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
-    p_ablate.add_argument("--models", nargs="+", default=[DEFAULT_MODEL])
+    p_ablate.add_argument("--models", nargs="+", default=sorted(PRICING))
     p_ablate.add_argument(
         "--variants", nargs="+", default=sorted(prompts.VARIANTS), choices=sorted(prompts.VARIANTS)
     )
-    p_ablate.add_argument("--cache-system", action="store_true")
-    p_ablate.add_argument("--output", type=Path, help="write the results table as JSON")
+    p_ablate.add_argument("--output", type=Path)
     p_ablate.set_defaults(func=cmd_ablate)
 
     return parser
@@ -231,7 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except RuntimeError as exc:  # missing credentials
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
