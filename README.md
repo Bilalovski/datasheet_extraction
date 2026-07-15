@@ -1,5 +1,7 @@
 # Datasheet Extraction
 
+[![ci](https://github.com/Bilalovski/datasheet_extraction/actions/workflows/ci.yml/badge.svg)](https://github.com/Bilalovski/datasheet_extraction/actions/workflows/ci.yml)
+
 Pull a sensor's specifications out of its datasheet into a typed object, and
 measure how often that goes wrong.
 
