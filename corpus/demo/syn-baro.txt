@@ -1,0 +1,11 @@
+Nordic Sensing
+SYN-P90 Barometric Pressure Sensor
+
+
+The SYN-P90 is a digital barometric pressure sensor for altimetry.
+
+  Interface .................... I2C and SPI
+  Supply voltage ............... 1.7 V to 3.6 V
+  Operating temperature ........ -40 to +85 degC
+  Pressure range ............... 260 hPa to 1260 hPa
+  Absolute accuracy ............ +/- 0.6 hPa

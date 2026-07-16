@@ -75,7 +75,7 @@ class TestHappyPath:
     def test_returns_the_parsed_spec(self):
         client = FakeClient(response({"part_number": "RDX-7700", "max_range_m": 250}))
 
-        result = extract_one(client, "rdx-7700", "text")
+        result = extract_one(client, "vl53l1x", "text")
 
         assert result.ok
         assert result.spec.part_number == "RDX-7700"
@@ -100,8 +100,8 @@ class TestHappyPath:
 
         call = client.calls[0]
         params = call["tools"][0]["function"]["parameters"]
-        assert "center_frequency_ghz" in params["properties"]
-        assert "midpoint" in params["properties"]["center_frequency_ghz"]["description"]
+        assert "field_of_view_deg" in params["properties"]
+        assert "symmetric cone" in params["properties"]["field_of_view_deg"]["description"]
         assert "DATASHEET BODY" in call["messages"][1]["content"]
 
     def test_uses_auto_tool_choice(self):
@@ -118,14 +118,14 @@ class TestSchemaViolationsAreCaught:
     """DeepSeek has no strict schema mode, so client-side validation is real."""
 
     def test_quoted_null_in_a_numeric_field_is_repaired(self):
-        # Observed from deepseek-reasoner: "elevation_fov_deg": "null".
-        client = FakeClient(response({"part_number": "X", "elevation_fov_deg": "null"}))
+        # Observed from deepseek-reasoner: a quoted "null" where a number belongs.
+        client = FakeClient(response({"part_number": "X", "field_of_view_deg": "null"}))
 
         result = extract_one(client, "d", "text")
 
         assert result.ok
-        assert result.spec.elevation_fov_deg is None
-        assert "elevation_fov_deg" in result.repaired_fields
+        assert result.spec.field_of_view_deg is None
+        assert "field_of_view_deg" in result.repaired_fields
 
     def test_a_genuine_type_error_is_a_failure_not_a_repair(self):
         client = FakeClient(response({"max_range_m": "quite far"}))

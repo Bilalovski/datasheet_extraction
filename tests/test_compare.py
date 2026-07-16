@@ -45,23 +45,23 @@ class TestNormaliseText:
 
 class TestCompareField:
     def test_both_null_is_a_true_negative(self):
-        assert compare_field("elevation_fov_deg", None, None) is Outcome.TRUE_NEGATIVE
+        assert compare_field("field_of_view_deg", None, None) is Outcome.TRUE_NEGATIVE
 
     def test_invented_value_is_a_hallucination(self):
-        assert compare_field("elevation_fov_deg", None, 30.0) is Outcome.HALLUCINATION
+        assert compare_field("field_of_view_deg", None, 30.0) is Outcome.HALLUCINATION
 
     def test_missed_value_is_a_false_negative(self):
-        assert compare_field("elevation_fov_deg", 30.0, None) is Outcome.FALSE_NEGATIVE
+        assert compare_field("field_of_view_deg", 30.0, None) is Outcome.FALSE_NEGATIVE
 
     def test_agreeing_values_are_a_true_positive(self):
-        assert compare_field("center_frequency_ghz", 78.5, 78.5) is Outcome.TRUE_POSITIVE
+        assert compare_field("max_range_m", 78.5, 78.5) is Outcome.TRUE_POSITIVE
 
     def test_disagreeing_values_are_a_wrong_value(self):
-        assert compare_field("center_frequency_ghz", 78.5, 77.0) is Outcome.WRONG_VALUE
+        assert compare_field("max_range_m", 78.5, 77.0) is Outcome.WRONG_VALUE
 
     def test_numeric_field_tolerates_int_float_mismatch(self):
-        # The schema types tx_channels as int; a model returning 3.0 agrees.
-        assert compare_field("tx_channels", 3, 3.0) is Outcome.TRUE_POSITIVE
+        # A field typed loosely still matches 15 vs 15.0.
+        assert compare_field("field_of_view_deg", 15, 15.0) is Outcome.TRUE_POSITIVE
 
     def test_string_field_compares_normalised(self):
         outcome = compare_field(

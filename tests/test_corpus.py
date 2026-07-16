@@ -23,9 +23,9 @@ class TestDemoCorpus:
 
     def test_gold_labels_validate_against_the_schema(self):
         gold = load_gold(DEMO)
-        assert gold["rdx-7700"].center_frequency_ghz == 78.5  # 76-81 GHz midpoint
-        assert gold["rdx-7700"].azimuth_fov_deg == 120.0  # +/-60 is a 120 total
-        assert gold["mmw-2440"].range_resolution_m == 0.6  # 60 cm
+        assert gold["syn-tof"].field_of_view_deg == 20.0
+        assert gold["syn-temp"].temperature_accuracy_c == 0.25  # worst-case
+        assert gold["syn-baro"].pressure_max_hpa == 1260
 
     def test_corpus_contains_fields_that_are_genuinely_absent(self):
         # Without unstated fields there is nothing to measure hallucination on,
@@ -39,11 +39,13 @@ class TestDemoCorpus:
         )
         assert absent >= 20
 
-    def test_elevation_is_explicitly_unstated_in_mmw_2440(self):
-        # The document says elevation is not specified — a model that fills it
-        # in anyway should be scored as hallucinating, not as merely wrong.
+    def test_ranging_fields_are_null_for_point_sensors(self):
+        # A temperature sensor states no range — a model that fills one in is
+        # hallucinating, not merely wrong. This cross-family null structure is
+        # what the hallucination metric feeds on.
         gold = load_gold(DEMO)
-        assert gold["mmw-2440"].elevation_fov_deg is None
+        assert gold["syn-temp"].max_range_m is None
+        assert gold["syn-temp"].field_of_view_deg is None
 
 
 class TestCorpusValidation:

@@ -1,10 +1,19 @@
 """The extraction target: a sensor's specifications as structured data.
 
 Every field is optional, and that is load-bearing rather than lazy typing. A
-datasheet that never states its elevation field of view should produce
-``elevation_fov_deg=None``, not a plausible-looking number. The evaluator scores
-those absences (see :mod:`datasheet_extraction.evaluate`), so the schema has to
-be able to express "not stated" for every field.
+datasheet that never states a value should produce ``None`` for that field, not a
+plausible-looking number. The evaluator scores those absences, so the schema has
+to express "not stated" for every field.
+
+The field set is a union across the sensor families in the corpus (ranging,
+environmental, magnetic), so most fields are null for any given part — an
+ultrasonic sensor nulls the pressure fields, a barometer nulls the ranging ones.
+That cross-family null structure is what the hallucination metric feeds on.
+
+Field *descriptions* carry the labelling conventions verbatim, because the model
+reads them (they are sent as the extraction tool's parameters) and must be judged
+by the same rules the gold labels were written under. Where a convention was a
+real judgement call, it is stated in the description.
 """
 
 from __future__ import annotations
@@ -13,7 +22,10 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-SensorType = Literal["radar", "lidar", "camera", "imu", "ultrasonic", "other"]
+SensorType = Literal[
+    "lidar", "tof", "ultrasonic", "temperature", "pressure",
+    "magnetometer", "environmental", "other",
+]
 
 
 class SensorSpec(BaseModel):
@@ -21,86 +33,135 @@ class SensorSpec(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    # --- identity ---
     part_number: str | None = Field(
         default=None,
         description=(
-            "Manufacturer's part number, exactly as printed (e.g. 'AWR1843'). "
+            "Manufacturer's part number, exactly as printed (e.g. 'VL53L1X'). "
             "Null if not stated."
         ),
     )
     manufacturer: str | None = Field(
         default=None,
-        description="Company that makes the sensor (e.g. 'Texas Instruments'). Null if not stated.",
+        description=(
+            "Company that makes the sensor (e.g. 'STMicroelectronics'). Null if the "
+            "datasheet does not name one — do not infer it from the part number."
+        ),
     )
     sensor_type: SensorType | None = Field(
         default=None,
         description="What kind of sensor this is. Null if it cannot be determined.",
     )
 
-    center_frequency_ghz: float | None = Field(
-        default=None,
-        description=(
-            "Operating centre frequency in GHz. If the datasheet gives a band "
-            "(e.g. '76-81 GHz'), report the midpoint. Null if not stated."
-        ),
-    )
-    bandwidth_mhz: float | None = Field(
-        default=None,
-        description="Usable sweep bandwidth in MHz. Null if not stated.",
-    )
-    max_range_m: float | None = Field(
-        default=None,
-        description="Maximum detection range in metres. Null if not stated.",
-    )
-    range_resolution_m: float | None = Field(
-        default=None,
-        description="Range resolution in metres. Null if not stated.",
-    )
-    azimuth_fov_deg: float | None = Field(
-        default=None,
-        description=(
-            "Total azimuth field of view in degrees. A '±60°' spec is a 120° "
-            "total FoV. Null if not stated."
-        ),
-    )
-    elevation_fov_deg: float | None = Field(
-        default=None,
-        description=(
-            "Total elevation field of view in degrees. A '±15°' spec is a 30° "
-            "total FoV. Null if not stated."
-        ),
-    )
-    tx_channels: int | None = Field(
-        default=None,
-        description="Number of transmit channels/antennas. Null if not stated.",
-    )
-    rx_channels: int | None = Field(
-        default=None,
-        description="Number of receive channels/antennas. Null if not stated.",
-    )
-    supply_voltage_v: float | None = Field(
-        default=None,
-        description="Nominal supply voltage in volts. Null if not stated.",
-    )
-    power_consumption_w: float | None = Field(
-        default=None,
-        description="Typical power consumption in watts. Null if not stated.",
-    )
+    # --- electrical / interface ---
     interface: str | None = Field(
         default=None,
         description=(
-            "Primary data interface (e.g. 'CAN', 'Ethernet', 'SPI', 'LVDS'). "
+            "Primary digital data interface (e.g. 'I2C', 'SPI', 'UART'). Join two "
+            "co-equal buses as 'I2C/SPI'. Null if the device has no named digital bus "
+            "(e.g. a raw trigger/echo pulse interface)."
+        ),
+    )
+    supply_voltage_min_v: float | None = Field(
+        default=None,
+        description=(
+            "Minimum of the main supply voltage you provide to the device (the VDD "
+            "you plug in), in volts. If the datasheet gives a single nominal supply, "
+            "use it for both min and max. Null if not stated."
+        ),
+    )
+    supply_voltage_max_v: float | None = Field(
+        default=None,
+        description="Maximum of the main supply voltage, in volts. Null if not stated.",
+    )
+    active_current_ma: float | None = Field(
+        default=None,
+        description=(
+            "Typical active/ranging-mode supply current, in milliamps. Null if only "
+            "given as a family of mode/rate-dependent values with no single typical."
+        ),
+    )
+
+    # --- operating environment ---
+    operating_temp_min_c: float | None = Field(
+        default=None,
+        description=(
+            "Minimum operating (ambient) temperature in degrees Celsius. "
             "Null if not stated."
         ),
     )
-    operating_temp_min_c: float | None = Field(
-        default=None,
-        description="Minimum operating temperature in degrees Celsius. Null if not stated.",
-    )
     operating_temp_max_c: float | None = Field(
         default=None,
-        description="Maximum operating temperature in degrees Celsius. Null if not stated.",
+        description=(
+            "Maximum operating (ambient) temperature in degrees Celsius. "
+            "Null if not stated."
+        ),
     )
+
+    # --- ranging (lidar / tof / ultrasonic) ---
+    min_range_m: float | None = Field(
+        default=None,
+        description="Minimum measurable distance in metres. Null if not stated.",
+    )
+    max_range_m: float | None = Field(
+        default=None,
+        description="Maximum measurable distance in metres. Null if not stated.",
+    )
+    range_resolution_m: float | None = Field(
+        default=None,
+        description="Distance resolution in metres. Null if not stated.",
+    )
+    field_of_view_deg: float | None = Field(
+        default=None,
+        description=(
+            "Full field of view / beam angle in degrees. These sensors have a "
+            "symmetric cone, so this is a single angle, not separate azimuth and "
+            "elevation. Null if not stated."
+        ),
+    )
+    max_output_rate_hz: float | None = Field(
+        default=None,
+        description=(
+            "Maximum measurement/ranging output rate in Hz. Null if not stated, or "
+            "only given under a narrow condition (e.g. 'short range only')."
+        ),
+    )
+
+    # --- point-measurement sensors (temperature / pressure / magnetometer) ---
+    temperature_accuracy_c: float | None = Field(
+        default=None,
+        description=(
+            "Temperature measurement accuracy in degrees Celsius, worst case over the "
+            "stated range (the '±X max' figure, not the best-case headline). Null if "
+            "not stated."
+        ),
+    )
+    pressure_min_hpa: float | None = Field(
+        default=None,
+        description="Minimum measurable pressure in hPa. Null if not stated.",
+    )
+    pressure_max_hpa: float | None = Field(
+        default=None,
+        description="Maximum measurable pressure in hPa. Null if not stated.",
+    )
+    pressure_accuracy_hpa: float | None = Field(
+        default=None,
+        description=(
+            "Absolute pressure accuracy in hPa, worst case (use the absolute-accuracy "
+            "figure, not the smaller relative-accuracy headline). Null if not stated."
+        ),
+    )
+    mag_range_ut: float | None = Field(
+        default=None,
+        description=(
+            "Magnetic field measurement range in microtesla (the ± magnitude). Where "
+            "it differs by axis, use the maximum full-scale across axes. Null if not stated."
+        ),
+    )
+
+
+#: Field names in the order the report renders them.
+FIELDS: list[str] = list(SensorSpec.model_fields)
 
 
 def _numeric_fields(model: type[BaseModel]) -> frozenset[str]:
@@ -113,24 +174,19 @@ def _numeric_fields(model: type[BaseModel]) -> frozenset[str]:
     return frozenset(numeric)
 
 
-#: Field names in the order the report renders them.
-FIELDS: list[str] = list(SensorSpec.model_fields)
-
 #: Fields compared with a relative tolerance rather than exact equality.
 #: Derived from the annotations so adding a field to the schema is enough.
 NUMERIC_FIELDS: frozenset[str] = _numeric_fields(SensorSpec)
 
 
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """Render a Pydantic model as a schema the structured-outputs API accepts.
+    """Render a Pydantic model as a schema for the extraction tool's parameters.
 
-    Two things differ from Pydantic's default output. Every object needs
-    ``additionalProperties: false``, and every property must appear in
-    ``required`` — optional fields are expressed as a null-able type rather than
-    an absent key, which is why every field here is ``X | None``.
-
-    Needed only for the Batch API, where responses go through
-    ``output_config.format`` instead of ``messages.parse()``.
+    Every object gets ``additionalProperties: false`` and every property is listed
+    in ``required`` — optionality is expressed as a nullable type, which is why
+    every field is ``X | None``. DeepSeek does not enforce this server-side, so the
+    schema is a guide to the model and Pydantic does the real enforcement on the
+    way back in.
     """
     schema = model.model_json_schema()
 

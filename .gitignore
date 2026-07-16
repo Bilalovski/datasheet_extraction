@@ -12,7 +12,11 @@ venv/
 predictions.json
 ablation.json
 
-# Fetched documents are not redistributed — see corpus/README.md
+# Fetched datasheet text/PDFs are copyrighted — not redistributed. Only the
+# gold labels and the fetch script are committed; see corpus/README.md.
+corpus/sensors/*.pdf
+corpus/sensors/*.txt
+!corpus/sensors/gold.json
 corpus/real/*.pdf
 corpus/real/*.txt
 !corpus/real/gold.json

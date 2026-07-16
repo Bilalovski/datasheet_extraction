@@ -63,10 +63,10 @@ class TestHallucinationRate:
         # This is exactly why the metric exists: precision on stated fields is
         # 1.0 here, and the model still invented a spec that isn't in the doc.
         gold = {"a": spec(part_number="X")}
-        report = evaluate(gold, {"a": spec(part_number="X", supply_voltage_v=3.3)})
+        report = evaluate(gold, {"a": spec(part_number="X", supply_voltage_min_v=3.3)})
 
         assert report.fields["part_number"].precision == 1.0
-        assert report.fields["supply_voltage_v"].hallucination_rate == 1.0
+        assert report.fields["supply_voltage_min_v"].hallucination_rate == 1.0
 
 
 class TestFailedExtractions:

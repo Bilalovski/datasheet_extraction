@@ -14,17 +14,16 @@ That last number is the one this repo exists for.
 
 ## Why hallucination rate, specifically
 
-A datasheet is mostly *absence*. A product brief states five things and stays
-silent about eleven, and "not stated" is the correct answer for those eleven —
+A datasheet is mostly *absence*. A sensor states a dozen things and stays silent
+about a dozen more, and "not stated" is the correct answer for the silent ones —
 not a gap in the data, but a fact about the document a model can get right or
 wrong.
 
-Precision and recall computed only over stated fields cannot see this. A model
-that reads the `TRX-9` brief, correctly reports its five specs, and then fills in
-a plausible operating temperature range that appears nowhere in the text scores
-**precision 1.0** — and is the model you must never put in front of a procurement
-decision, because a fabricated spec propagates silently while a null is visibly
-missing.
+Precision and recall computed only over stated fields can't see this. A model
+that reads a temperature-sensor datasheet, correctly reports its specs, and then
+fills in a plausible field-of-view that appears nowhere in the text scores
+**precision 1.0** — and is the model you must never trust, because a fabricated
+spec propagates silently while a null is visibly missing.
 
 So every field of every document lands in one of five buckets:
 
@@ -36,107 +35,125 @@ So every field of every document lands in one of five buckets:
 `hallucination_rate` is scored over the right-hand column only: the chances the
 model had to invent something, and how often it took them.
 
-`WRONG_VALUE` counts as **both** a false positive and a false negative. The model
-both failed to produce the right answer and asserted a wrong one, and a metric
-that charged it once would rank "confidently wrong" level with "said nothing" —
-backwards for anything downstream.
+`WRONG_VALUE` counts as **both** a false positive and a false negative — the model
+both failed to produce the right answer and asserted a wrong one, and charging it
+once would rank "confidently wrong" level with "said nothing."
 
-## Results, and what they don't show
+## Results
 
-Measured 2026-07-16 on `corpus/demo`, 4 documents × 16 fields, 41 stated fields
-and 23 unstated. Raw output: [`results/`](results/).
+| model | variant | F1 | precision | recall | halluc. rate | cost | latency |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| v4-flash | minimal | 0.758 | 0.753 | 0.763 | 0.194 | $0.027 | 19 s |
+| v4-flash | **strict** | **0.809** | 0.753 | 0.875 | **0.181** | $0.027 | 18 s |
+| v4-flash | strict+examples | 0.770 | 0.713 | 0.838 | 0.194 | $0.027 | 15 s |
+| v4-pro | minimal | 0.793 | 0.734 | 0.863 | 0.208 | $0.084 | 28 s |
+| v4-pro | strict | 0.811 | 0.747 | 0.888 | 0.208 | $0.084 | 27 s |
+| v4-pro | strict+examples | 0.796 | 0.729 | 0.875 | 0.222 | $0.087 | 32 s |
 
-| model | variant | F1 | halluc. rate | cost (USD) | latency | repairs |
-| --- | --- | --- | --- | --- | --- | --- |
-| v4-flash | minimal | 1.0 | 0.0 | $0.00102 | 3.7 s | 0 |
-| v4-flash | strict | 1.0 | 0.0 | $0.00119 | 4.5 s | 0 |
-| v4-flash | strict_with_examples | 1.0 | 0.0 | $0.00064 | 4.0 s | 1 |
-| v4-pro | minimal | 1.0 | 0.0 | $0.00376 | 6.8 s | 0 |
-| v4-pro | strict | 1.0 | 0.0 | $0.00344 | 5.7 s | 0 |
-| v4-pro | strict_with_examples | 1.0 | 0.0 | $0.00377 | 6.4 s | 0 |
+*Measured 2026-07-17 on `corpus/sensors` — 8 real datasheets, hand-labelled. Raw
+output in [`results/`](results/); reproduce with `python corpus/sensors/fetch.py`.
+Whole sweep cost $0.34.*
 
-**Every configuration scores 1.0. The demo corpus is saturated.** Six
-configurations, one distinct F1 value between them — it cannot tell any model or
-prompt apart, so none of these rows is evidence that any model is good at this
-task. It is evidence that four clean, unambiguous documents written to match
-their own labels are easy, which was true before the run and is why the corpus
-ships as a fixture rather than a benchmark. Real datasheets — PDF-mangled tables,
-footnoted conditions, per-mode specs — are where the metric would start to
-separate things. See [corpus/README.md](corpus/README.md).
+Three findings, two of them counterintuitive:
 
-Two things the sweep *does* measure honestly:
+1. **The bigger, 3×-pricier model isn't worth it.** v4-pro's best F1 (0.811) beats
+   v4-flash's best (0.809) by 0.002, for **3.1× the cost** and slower. On this task,
+   `v4-flash + strict` is the pick.
+2. **v4-pro hallucinates *more*, not less** — 0.21 vs 0.18. The stronger model is
+   more willing to fill a not-stated field with a plausible value. Precision-only
+   scoring would have hidden this and called pro the winner; the hallucination
+   column is the whole reason it doesn't.
+3. **Worked examples made it worse.** `strict+examples` underperforms plain
+   `strict` for *both* models — the examples push over-extraction (recall up,
+   precision and hallucination down). A reminder that more prompt isn't more
+   accuracy, and the only way to know is to measure it.
 
-- **v4-pro costs 3.8× more and runs 1.6× slower, for identical accuracy here.**
-  On a saturated corpus that's the expected shape of the result, and it's the
-  question the ablation exists to answer on a real one.
-- **One schema repair fired.** DeepSeek does not enforce the schema server-side,
-  and the model returned a null-ish string where a number-or-null belonged. Not
-  hypothetical — see below.
+The headline number is the hallucination rate: **~1 in 5 fields a datasheet
+doesn't state gets a fabricated value**, and it goes *up* with model size. That's
+the risk this harness exists to make visible.
 
-The whole sweep cost **$0.0138**.
+## The corpus, and why these sensors
+
+Eight commercial datasheets across six families — ToF, lidar, ultrasonic,
+temperature, pressure, magnetometer — all **simple single-supply parts** where
+every spec is a single stated number.
+
+That choice is deliberate and it's the interesting design decision in the repo.
+The first cut of this corpus used bare radar and IMU **SoCs** (a TI mmWave chip,
+etc.), and they turned out to be unlabellable against a flat schema: a radar SoC
+has four supply rails (no single "supply voltage"), quotes junction temperature
+not ambient, and leaves range and field-of-view to the antenna you bolt on — so
+half its fields have no determinate value. Chasing "what's the minimum supply
+voltage of an IWR6843" through its four-rail power table is what surfaced the
+rule the whole eval now rests on:
+
+> **Null means the datasheet doesn't state it — never "the schema can't hold it"
+> and never "I didn't read far enough." A value stated in a form the schema can't
+> represent is a schema bug, fixed by sharpening the field, not by nulling.**
+
+Simple sensors have one determinate answer per field, so the gold labels are
+defensible and the null structure is honest. Full provenance and the labelling
+conventions are in [corpus/sensors/README.md](corpus/sensors/README.md); the
+conventions are also baked into the field descriptions in `schema.py`, so the
+model is judged by the same rules the labels were written under.
+
+The **worst-case-accuracy** convention does real work here: TMP117's label is
+0.3 °C (the ±0.3 max over its full range), not the advertised "up to ±0.1"; and
+BMP388's is 0.5 hPa absolute, not the 0.08 relative-accuracy headline — ~6× worse
+than the number on the front page.
 
 ## Running it
 
 ```bash
 pip install -e ".[dev]"
-export DEEPSEEK_API_KEY=...        # never hardcode this; see Credentials
+export DEEPSEEK_API_KEY=...          # never hardcode this; see Credentials
+python corpus/sensors/fetch.py       # downloads the datasheets (needs pdftotext)
 
-python -m datasheet_extraction evaluate --corpus corpus/demo
-python -m datasheet_extraction ablate --output ablation.json
+python -m datasheet_extraction evaluate --corpus corpus/sensors
+python -m datasheet_extraction ablate  --corpus corpus/sensors --output results/run.json
 ```
+
+`corpus/demo` (four synthetic sensors) needs no fetch and no key beyond the API
+call — it's what CI and the offline tests run on.
 
 Models are `deepseek-v4-flash` (default) and `deepseek-v4-pro`.
 
 > **`deepseek-chat` and `deepseek-reasoner` retire on 2026-07-24.** They are
-> aliases for v4-flash in non-thinking and thinking mode. This repo defaults to
-> the canonical ids; the aliases still price correctly so old runs don't crash.
+> aliases for v4-flash in non-thinking / thinking mode. This repo defaults to the
+> canonical ids; the aliases still price correctly so old runs don't crash.
 
 ### Credentials
 
-The key is read from `DEEPSEEK_API_KEY` and **has no fallback default**, which is
-deliberate. A hardcoded key in a public repo is scraped from GitHub's push
-firehose within minutes, and deleting the line later doesn't remove it from git
-history. `tests/test_extract.py` asserts no `sk-` string exists in `src/`.
+The key is read from `DEEPSEEK_API_KEY` and **has no fallback default**. A
+hardcoded key in a public repo is scraped from GitHub's push firehose within
+minutes, and deleting the line later doesn't remove it from git history.
+`tests/test_extract.py` asserts no `sk-` string exists in `src/`.
 
 ## What DeepSeek's API forced, and how it was found out
 
-Both of these came from probing the API, not from assuming it behaves like
-OpenAI's:
+Both came from probing the API, not assuming it behaves like OpenAI's:
 
-**There is no strict schema mode.** `response_format={"type": "json_schema"}` is
-rejected outright — *"This response_format type is unavailable now"*. So the
-schema travels as a **function's parameters** and is enforced client-side by
-Pydantic. This also happens to be the better channel: passing `SensorSpec`'s JSON
-schema as the tool parameters is what carries the field descriptions — the unit
-rules, the half-angle convention, "null if not stated" — to the model. The prompt
-engineering lives in the type.
-
-Client-side validation is a real step, not a formality. `deepseek-reasoner`
-returns `"elevation_fov_deg": "null"` — a *quoted string* where the schema says
-number-or-null. A null-ish string is repaired to `None` and **counted**, so the
-extraction metric measures extraction rather than JSON etiquette while the
-serialisation defect stays visible in the `repairs` column. A genuine type error
-(`"quite far"` in a numeric field) is a failure, not a repair.
+**No strict schema mode.** `response_format={"type": "json_schema"}` is rejected —
+*"This response_format type is unavailable now"*. So the schema travels as a
+**tool's parameters** and Pydantic enforces it client-side. That's the better
+channel anyway: passing the schema as the tool parameters is what carries the
+field descriptions — and thus the labelling conventions — to the model. Client-side
+validation is real, not a formality: `deepseek-reasoner` returns
+`"field_of_view_deg": "null"` as a *quoted string*. A null-ish string is repaired
+to `None` and **counted** (the `repairs` column), so the metric measures
+extraction rather than JSON etiquette while the defect stays visible; a genuine
+type error stays a failure.
 
 **Forced `tool_choice` only works in non-thinking mode.** Every canonical model id
-runs in thinking mode and rejects `tool_choice="required"` or a named function
-with *"Thinking mode does not support this tool_choice"*. `tool_choice="auto"` is
-the only mechanism that works across all of them, so that's what's used — and a
-turn where the model answers in prose instead of calling the tool is a recorded
-failure, because with `auto` that's reachable.
-
-| model id | resolves to | forced `tool_choice` | `auto` | `json_object` |
-| --- | --- | --- | --- | --- |
-| `deepseek-chat` | v4-flash, non-thinking | ✅ | ✅ | ✅ |
-| `deepseek-reasoner` | v4-flash, thinking | ❌ | ✅ | ✅ |
-| `deepseek-v4-flash` | v4-flash, thinking | ❌ | ✅ | ✅ |
-| `deepseek-v4-pro` | v4-pro, thinking | ❌ | ✅ | ✅ |
+runs in thinking mode and rejects `tool_choice="required"`. `tool_choice="auto"`
+is the only portable option, so a turn where the model answers in prose instead
+of calling the tool is a recorded failure.
 
 ## Layout
 
 ```
 src/datasheet_extraction/
-  schema.py     SensorSpec — every field nullable, because "not stated" is an answer
+  schema.py     SensorSpec — 19 fields, every one nullable; conventions in the descriptions
   prompts.py    prompt variants, as ablation arms
   extract.py    the API calls: tool-schema delivery, validation, failure capture
   compare.py    is this field right? numeric tolerance, text normalisation
@@ -144,46 +161,42 @@ src/datasheet_extraction/
   cost.py       token accounting against DeepSeek's published rates
   corpus.py     loading documents + gold labels, and refusing inconsistent ones
   cli.py        extract / evaluate / ablate
-corpus/demo/    four synthetic datasheets and their labels
+corpus/demo/    four synthetic sensors + labels (offline, runs in CI)
+corpus/sensors/ eight real datasheets: gold labels committed, text fetched
 results/        raw ablation output
 tests/          76 tests, no API key required
 ```
 
 ## Design notes
 
-**Failures are data, not exceptions.** A corpus run must not lose forty good
-extractions because the forty-first hit a rate limit, so API errors, prose
-answers, malformed JSON, and schema violations are captured per document. The
-evaluator scores a failed extraction as a miss on every field rather than
-skipping it — an extraction that crashed is a failure, not an absence of
-evidence.
+**Failures are data, not exceptions.** A corpus run must not lose good extractions
+because one request hit a rate limit, so API errors, prose answers, malformed
+JSON, and schema violations are captured per document. The evaluator scores a
+failed extraction as a miss on every field — a crash is a failure, not an absence
+of evidence.
 
 **Numeric comparison is relative, not exact.** `77` and `77.0` are the same
 answer; 1% tolerance absorbs rounding without absorbing real errors. Absolute
-tolerance would be nonsense across fields spanning `0.04 m` to `4000 MHz`.
+tolerance would be nonsense across fields spanning `0.01 m` to `1250 hPa`.
 
 **Caching needs no code.** DeepSeek caches context automatically and reports the
-hit/miss split per request — no `cache_control`, no minimum-prefix rules, nothing
-to opt into. A cache hit costs **~2% of a miss** ($0.0028 vs $0.14 per MTok on
-v4-flash), which is a steeper discount than most providers give. The shared
-system prompt across a corpus run measured a **44% hit rate** on the four-document
-demo, and that rate rises with corpus size. `cost.py` bills hits and misses at
-their real separate rates instead of averaging them.
+hit/miss split per request — no `cache_control`, no minimum-prefix rules. A hit
+costs ~2% of a miss, so `cost.py` bills hits and misses at their real separate
+rates instead of averaging.
 
 **Tests run without an API key.** The client is faked, so CI proves the extraction
-and scoring logic without spending anything or depending on the API being up. The
-faked failures are the ones the real API actually produces — quoted `"null"`,
-prose instead of a tool call — because those were observed first.
+and scoring logic without spending anything. The faked failures are the ones the
+real API produces — quoted `"null"`, prose instead of a tool call — because those
+were observed first.
 
 ## Known limits
 
-- **Text in, text out.** The loader takes plain text; getting there from a PDF is
-  out of scope, and that choice probably costs more accuracy than any prompt
-  variant here. It deserves its own ablation.
-- **Single-label ground truth.** Each field has one right answer. Datasheets
-  giving a spec per operating mode don't fit the schema.
-- **String matching is normalised-exact.** "Texas Instruments" and "Texas
-  Instruments Inc." score as different answers. Deliberate — a fuzzy comparator
-  would quietly inflate the numbers — but `manufacturer` precision is stricter
-  than it looks.
+- **Text in, text out.** `fetch.py` runs `pdftotext -layout`; a different
+  extractor would feed the model different text, and that choice probably matters
+  more than any prompt variant. Its own ablation, unbuilt.
+- **Single-label ground truth**, one human verification pass. Corrections welcome —
+  edit `corpus/sensors/gold.json`.
+- **String matching is normalised-exact.** "I2C" vs "I2C/SPI" scores as a miss.
+  Deliberate — a fuzzy comparator would inflate the numbers — but it makes
+  `interface` a stricter field than it looks.
 - **Prices are hardcoded** as read on 2026-07-15 and will drift.

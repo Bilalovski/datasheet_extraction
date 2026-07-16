@@ -18,8 +18,8 @@ class TestSchema:
         assert all(getattr(spec, name) is None for name in FIELDS)
 
     def test_numeric_fields_derived_from_annotations(self):
-        assert "center_frequency_ghz" in NUMERIC_FIELDS
-        assert "tx_channels" in NUMERIC_FIELDS  # int, not float
+        assert "max_range_m" in NUMERIC_FIELDS
+        assert "supply_voltage_min_v" in NUMERIC_FIELDS
         assert "part_number" not in NUMERIC_FIELDS
         assert "sensor_type" not in NUMERIC_FIELDS
 
@@ -44,8 +44,8 @@ class TestStrictJsonSchema:
         # The schema is how the unit rules reach the model, since it's sent as
         # the tool's parameters. Losing descriptions would silently gut the prompt.
         props = strict_json_schema(SensorSpec)["properties"]
-        assert "midpoint" in props["center_frequency_ghz"]["description"]
-        assert "120" in props["azimuth_fov_deg"]["description"]
+        assert "worst case" in props["temperature_accuracy_c"]["description"]
+        assert "symmetric cone" in props["field_of_view_deg"]["description"]
 
 
 class TestUsage:

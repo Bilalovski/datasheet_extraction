@@ -16,11 +16,17 @@ GOLD_FILENAME = "gold.json"
 
 
 def load_documents(directory: Path) -> dict[str, str]:
-    """Read every ``.txt`` in ``directory``, keyed by filename stem."""
+    """Read every ``.txt`` in ``directory``, keyed by filename stem.
+
+    Read with ``errors="replace"``: text extracted from real datasheet PDFs is
+    rarely clean UTF-8 (degree and plus-minus signs come through as stray bytes),
+    and an undecodable byte should mangle one character, not sink the whole run.
+    The model sees the same mangling either way.
+    """
     if not directory.is_dir():
         raise NotADirectoryError(f"no corpus directory at {directory}")
     return {
-        path.stem: path.read_text(encoding="utf-8")
+        path.stem: path.read_text(encoding="utf-8", errors="replace")
         for path in sorted(directory.glob("*.txt"))
     }
 

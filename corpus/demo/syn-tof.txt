@@ -1,0 +1,19 @@
+Acme Photonics
+SYN-TOF-100  Time-of-Flight Ranging Sensor
+Preliminary Datasheet
+
+
+Description
+-----------
+The SYN-TOF-100 is a compact time-of-flight ranging sensor for short-range
+obstacle detection and gesture sensing.
+
+
+Specifications
+--------------
+  Operating voltage ............ 2.8 V to 3.3 V
+  Operating temperature ........ -20 to 70 degC
+  Maximum range ................ up to 3 m
+  Field of view ................ 20 degrees (typical)
+  Ranging rate ................. up to 30 Hz
+  Interface .................... I2C (up to 400 kHz)

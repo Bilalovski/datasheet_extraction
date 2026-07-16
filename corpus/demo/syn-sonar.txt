@@ -1,0 +1,11 @@
+SYN-US-7 Ultrasonic Range Finder
+Product Brief
+
+
+The SYN-US-7 is a low-cost ultrasonic range finder for indoor robotics.
+
+  Supply .............. 5 V
+  Range ............... 3 cm to 5 m
+  Beam angle .......... 30 degrees
+
+This brief is a summary. Contact sales for the full specification.

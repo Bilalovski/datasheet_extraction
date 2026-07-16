@@ -1,0 +1,10 @@
+Nordic Sensing
+SYN-T20 Digital Temperature Sensor
+
+
+The SYN-T20 is a high-accuracy digital temperature sensor.
+
+  Interface .................... I2C
+  Supply voltage ............... 1.8 V to 3.6 V
+  Operating temperature range .. -40 degC to 125 degC
+  Accuracy ..................... +/-0.25 degC (maximum) over the full range
